@@ -8,6 +8,8 @@ use std::{
     },
     task::{Context, Poll},
 };
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio_util::sync::PollSemaphore;
 
 #[tokio::main]
 async fn main() {
@@ -17,9 +19,20 @@ async fn main() {
         .unwrap();
 }
 
-#[derive(Default)]
 struct MyServiceFactory {
     num_connected: Arc<AtomicU64>,
+    semaphore: PollSemaphore,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Default for MyServiceFactory {
+    fn default() -> Self {
+        Self {
+            num_connected: Default::default(),
+            semaphore: PollSemaphore::new(Arc::new(Semaphore::new(5))),
+            permit: Default::default(),
+        }
+    }
 }
 
 impl Service<&AddrStream> for MyServiceFactory {
@@ -27,11 +40,17 @@ impl Service<&AddrStream> for MyServiceFactory {
     type Error = Infallible;
     type Future = Ready<Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        if self.permit.is_none() {
+            self.permit = Some(futures::ready!(self.semaphore.poll_acquire(cx)).unwrap());
+        }
         Ok(()).into()
     }
 
     fn call(&mut self, req: &AddrStream) -> Self::Future {
+        let permit = self.permit.take().expect(
+            "you didn't drive me to readiness did you? you know that's a tower crime right?",
+        );
         let prev = self.num_connected.fetch_add(1, Ordering::SeqCst);
         println!(
             "↑ {} connections (accepted {})",
@@ -40,12 +59,14 @@ impl Service<&AddrStream> for MyServiceFactory {
         );
         ready(Ok(MyService {
             num_connected: self.num_connected.clone(),
+            permit,
         }))
     }
 }
 
 struct MyService {
     num_connected: Arc<AtomicU64>,
+    permit: OwnedSemaphorePermit,
 }
 
 impl Drop for MyService {
