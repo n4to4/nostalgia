@@ -2,18 +2,25 @@ use hyper::{server::conn::AddrStream, service::Service, Body, Request, Response,
 use std::{
     convert::Infallible,
     future::{ready, Ready},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     task::{Context, Poll},
 };
 
 #[tokio::main]
 async fn main() {
     Server::bind(&([127, 0, 0, 1], 1025).into())
-        .serve(MyServiceFactory)
+        .serve(MyServiceFactory::default())
         .await
         .unwrap();
 }
 
-struct MyServiceFactory;
+#[derive(Default)]
+struct MyServiceFactory {
+    num_connected: Arc<AtomicU64>,
+}
 
 impl Service<&AddrStream> for MyServiceFactory {
     type Response = MyService;
@@ -25,12 +32,28 @@ impl Service<&AddrStream> for MyServiceFactory {
     }
 
     fn call(&mut self, req: &AddrStream) -> Self::Future {
-        println!("Accepted connection from {}", req.remote_addr());
-        ready(Ok(MyService))
+        let prev = self.num_connected.fetch_add(1, Ordering::SeqCst);
+        println!(
+            "↑ {} connections (accepted {})",
+            prev + 1,
+            req.remote_addr()
+        );
+        ready(Ok(MyService {
+            num_connected: self.num_connected.clone(),
+        }))
     }
 }
 
-struct MyService;
+struct MyService {
+    num_connected: Arc<AtomicU64>,
+}
+
+impl Drop for MyService {
+    fn drop(&mut self) {
+        let prev = self.num_connected.fetch_sub(1, Ordering::SeqCst);
+        println!("↓ {} connections (dropped)", prev - 1);
+    }
+}
 
 impl Service<Request<Body>> for MyService {
     type Response = Response<Body>;
@@ -42,7 +65,7 @@ impl Service<Request<Body>> for MyService {
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        println!("Handling {req:?}");
+        println!("{} {}", req.method(), req.uri());
         ready(Ok(Response::builder()
             .body("Hello World!\n".into())
             .unwrap()))
