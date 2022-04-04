@@ -1,12 +1,16 @@
 use std::{
     convert::Infallible,
+    future::Future,
     future::{ready, Ready},
+    pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::Duration,
 };
 
 use hyper::{server::conn::AddrStream, service::Service, Body, Request, Response, Server};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::time::Sleep;
 use tokio_util::sync::PollSemaphore;
 
 #[tokio::main]
@@ -64,7 +68,8 @@ struct MyService {
 impl Service<Request<Body>> for MyService {
     type Response = Response<Body>;
     type Error = Infallible;
-    type Future = Ready<Result<Self::Response, Self::Error>>;
+    //type Future = Ready<Result<Self::Response, Self::Error>>;
+    type Future = PretendFuture;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Ok(()).into()
@@ -72,8 +77,29 @@ impl Service<Request<Body>> for MyService {
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         println!("{} {}", req.method(), req.uri());
-        ready(Ok(Response::builder()
-            .body("Hello World!\n".into())
-            .unwrap()))
+        //ready(Ok(Response::builder()
+        //    .body("Hello World!\n".into())
+        //    .unwrap()))
+
+        PretendFuture {
+            sleep: tokio::time::sleep(Duration::from_millis(250)),
+            response: Some(Response::builder().body("Hello World\n".into()).unwrap()),
+        }
+    }
+}
+
+struct PretendFuture {
+    sleep: Sleep,
+    response: Option<Response<Body>>,
+}
+
+impl Future for PretendFuture {
+    type Output = Result<Response<Body>, Infallible>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        futures::ready!(
+            unsafe { self.as_mut().map_unchecked_mut(|this| &mut this.sleep) }.poll(cx)
+        );
+        Ok(unsafe { self.get_unchecked_mut() }.response.take().unwrap()).into()
     }
 }
