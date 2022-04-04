@@ -1,13 +1,11 @@
-use hyper::{server::conn::AddrStream, service::Service, Body, Request, Response, Server};
 use std::{
     convert::Infallible,
     future::{ready, Ready},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
     task::{Context, Poll},
 };
+
+use hyper::{server::conn::AddrStream, service::Service, Body, Request, Response, Server};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::PollSemaphore;
 
@@ -19,8 +17,9 @@ async fn main() {
         .unwrap();
 }
 
+const MAX_CONNS: usize = 5;
+
 struct MyServiceFactory {
-    num_connected: Arc<AtomicU64>,
     semaphore: PollSemaphore,
     permit: Option<OwnedSemaphorePermit>,
 }
@@ -28,9 +27,8 @@ struct MyServiceFactory {
 impl Default for MyServiceFactory {
     fn default() -> Self {
         Self {
-            num_connected: Default::default(),
-            semaphore: PollSemaphore::new(Arc::new(Semaphore::new(5))),
-            permit: Default::default(),
+            semaphore: PollSemaphore::new(Arc::new(Semaphore::new(MAX_CONNS))),
+            permit: None,
         }
     }
 }
@@ -47,33 +45,20 @@ impl Service<&AddrStream> for MyServiceFactory {
         Ok(()).into()
     }
 
-    fn call(&mut self, req: &AddrStream) -> Self::Future {
+    fn call(&mut self, _req: &AddrStream) -> Self::Future {
         let permit = self.permit.take().expect(
             "you didn't drive me to readiness did you? you know that's a tower crime right?",
         );
-        let prev = self.num_connected.fetch_add(1, Ordering::SeqCst);
         println!(
-            "↑ {} connections (accepted {})",
-            prev + 1,
-            req.remote_addr()
+            "↑ {} connections",
+            MAX_CONNS - self.semaphore.available_permits()
         );
-        ready(Ok(MyService {
-            num_connected: self.num_connected.clone(),
-            permit,
-        }))
+        ready(Ok(MyService { _permit: permit }))
     }
 }
 
 struct MyService {
-    num_connected: Arc<AtomicU64>,
-    permit: OwnedSemaphorePermit,
-}
-
-impl Drop for MyService {
-    fn drop(&mut self) {
-        let prev = self.num_connected.fetch_sub(1, Ordering::SeqCst);
-        println!("↓ {} connections (dropped)", prev - 1);
-    }
+    _permit: OwnedSemaphorePermit,
 }
 
 impl Service<Request<Body>> for MyService {
