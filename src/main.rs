@@ -67,7 +67,6 @@ struct MyService {
 impl Service<Request<Body>> for MyService {
     type Response = Response<Body>;
     type Error = Infallible;
-    //type Future = Ready<Result<Self::Response, Self::Error>>;
     type Future = PretendFuture;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -76,10 +75,6 @@ impl Service<Request<Body>> for MyService {
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         println!("{} {}", req.method(), req.uri());
-        //ready(Ok(Response::builder()
-        //    .body("Hello World!\n".into())
-        //    .unwrap()))
-
         PretendFuture {
             sleep: tokio::time::sleep(Duration::from_millis(250)),
             response: Some(Response::builder().body("Hello World\n".into()).unwrap()),
