@@ -20,17 +20,20 @@ async fn main() {
         .unwrap();
 }
 
-const MAX_CONNS: usize = 5;
+const MAX_CONNS: usize = 50;
+const MAX_INFLIGHT_REQUESTS: usize = 5;
 
 struct MyServiceFactory {
-    semaphore: PollSemaphore,
+    conn_semaphore: PollSemaphore,
+    reqs_semaphore: PollSemaphore,
     permit: Option<OwnedSemaphorePermit>,
 }
 
 impl Default for MyServiceFactory {
     fn default() -> Self {
         Self {
-            semaphore: PollSemaphore::new(Arc::new(Semaphore::new(MAX_CONNS))),
+            conn_semaphore: PollSemaphore::new(Arc::new(Semaphore::new(MAX_CONNS))),
+            reqs_semaphore: PollSemaphore::new(Arc::new(Semaphore::new(MAX_INFLIGHT_REQUESTS))),
             permit: None,
         }
     }
@@ -43,7 +46,7 @@ impl Service<&AddrStream> for MyServiceFactory {
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if self.permit.is_none() {
-            self.permit = Some(futures::ready!(self.semaphore.poll_acquire(cx)).unwrap());
+            self.permit = Some(futures::ready!(self.conn_semaphore.poll_acquire(cx)).unwrap());
         }
         Ok(()).into()
     }
@@ -54,14 +57,20 @@ impl Service<&AddrStream> for MyServiceFactory {
         );
         println!(
             "↑ {} connections",
-            MAX_CONNS - self.semaphore.available_permits()
+            MAX_CONNS - self.conn_semaphore.available_permits()
         );
-        ready(Ok(MyService { _permit: permit }))
+        ready(Ok(MyService {
+            _permit: permit,
+            semaphore: self.reqs_semaphore.clone(),
+            reqs_permit: None,
+        }))
     }
 }
 
 struct MyService {
     _permit: OwnedSemaphorePermit,
+    semaphore: PollSemaphore,
+    reqs_permit: Option<OwnedSemaphorePermit>,
 }
 
 impl Service<Request<Body>> for MyService {
@@ -69,15 +78,22 @@ impl Service<Request<Body>> for MyService {
     type Error = Infallible;
     type Future = PretendFuture;
 
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        if self.reqs_permit.is_none() {
+            self.reqs_permit = Some(futures::ready!(self.semaphore.poll_acquire(cx)).unwrap());
+        }
         Ok(()).into()
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
+        let permit = self.reqs_permit.take().expect(
+            "you didn't drive me to readiness did you? you know that's a tower crime right?",
+        );
         println!("{} {}", req.method(), req.uri());
         PretendFuture {
             sleep: tokio::time::sleep(Duration::from_millis(250)),
             response: Some(Response::builder().body("Hello World\n".into()).unwrap()),
+            permit,
         }
     }
 }
@@ -87,6 +103,7 @@ pin_project_lite::pin_project! {
         #[pin]
         sleep: Sleep,
         response: Option<Response<Body>>,
+        permit: OwnedSemaphorePermit,
     }
 }
 
