@@ -9,7 +9,6 @@ use std::{
 
 use hyper::{server::conn::AddrStream, service::Service, Body, Request, Response, Server};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio::time::Sleep;
 use tokio_util::sync::PollSemaphore;
 
 #[tokio::main]
@@ -76,7 +75,7 @@ struct MyService {
 impl Service<Request<Body>> for MyService {
     type Response = Response<Body>;
     type Error = Infallible;
-    type Future = PretendFuture;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if self.reqs_permit.is_none() {
@@ -90,29 +89,10 @@ impl Service<Request<Body>> for MyService {
             "you didn't drive me to readiness did you? you know that's a tower crime right?",
         );
         println!("{} {}", req.method(), req.uri());
-        PretendFuture {
-            sleep: tokio::time::sleep(Duration::from_millis(250)),
-            response: Some(Response::builder().body("Hello World\n".into()).unwrap()),
-            permit,
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    struct PretendFuture {
-        #[pin]
-        sleep: Sleep,
-        response: Option<Response<Body>>,
-        permit: OwnedSemaphorePermit,
-    }
-}
-
-impl Future for PretendFuture {
-    type Output = Result<Response<Body>, Infallible>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        futures::ready!(this.sleep.poll(cx));
-        Ok(this.response.take().unwrap()).into()
+        Box::pin(async move {
+            let _permit = permit;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            Ok(Response::builder().body("Hello World\n".into()).unwrap())
+        })
     }
 }
