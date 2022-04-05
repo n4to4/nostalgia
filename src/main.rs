@@ -82,18 +82,20 @@ impl Service<Request<Body>> for MyService {
     }
 }
 
-struct PretendFuture {
-    sleep: Sleep,
-    response: Option<Response<Body>>,
+pin_project_lite::pin_project! {
+    struct PretendFuture {
+        #[pin]
+        sleep: Sleep,
+        response: Option<Response<Body>>,
+    }
 }
 
 impl Future for PretendFuture {
     type Output = Result<Response<Body>, Infallible>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        futures::ready!(
-            unsafe { self.as_mut().map_unchecked_mut(|this| &mut this.sleep) }.poll(cx)
-        );
-        Ok(unsafe { self.get_unchecked_mut() }.response.take().unwrap()).into()
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        futures::ready!(this.sleep.poll(cx));
+        Ok(this.response.take().unwrap()).into()
     }
 }
