@@ -17,15 +17,7 @@ async fn main() {
         let sem = sem.clone();
         async move {
             Ok::<_, Infallible>(ConcurrencyLimit::with_semaphore(
-                service_fn(|req: Request<Body>| async move {
-                    println!("{} {}", req.method(), req.uri());
-                    tokio::time::sleep(Duration::from_millis(250)).await;
-                    Ok::<_, Infallible>(
-                        Response::builder()
-                            .body(Body::from("Hello World!\n"))
-                            .unwrap(),
-                    )
-                }),
+                service_fn(hello_world),
                 sem,
             ))
         }
@@ -35,4 +27,12 @@ async fn main() {
         .serve(app)
         .await
         .unwrap();
+}
+
+async fn hello_world(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    println!("{} {}", req.method(), req.uri());
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    Ok(Response::builder()
+        .body(Body::from("Hello World!\n"))
+        .unwrap())
 }
