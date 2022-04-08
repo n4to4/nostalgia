@@ -1,11 +1,6 @@
 use std::{convert::Infallible, time::Duration};
 
-use hyper::{
-    server::conn::AddrStream,
-    service::{make_service_fn, service_fn},
-    Body, Request, Response, Server,
-};
-use tower::limit::ConcurrencyLimitLayer;
+use hyper::{server::conn::AddrStream, service::make_service_fn, Body, Request, Response, Server};
 use tower::ServiceBuilder;
 
 const MAX_INFLIGHT_REQUESTS: usize = 5;
@@ -14,8 +9,8 @@ const MAX_INFLIGHT_REQUESTS: usize = 5;
 async fn main() {
     let app = make_service_fn(move |_stream: &AddrStream| async move {
         let svc = ServiceBuilder::new()
-            .layer(ConcurrencyLimitLayer::new(MAX_INFLIGHT_REQUESTS))
-            .service(service_fn(hello_world));
+            .concurrency_limit(MAX_INFLIGHT_REQUESTS)
+            .service_fn(hello_world);
         Ok::<_, Infallible>(svc)
     });
 
