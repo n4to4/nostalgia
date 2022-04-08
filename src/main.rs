@@ -6,20 +6,16 @@ use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::ServiceBuilder;
 
 const MAX_CONNS: usize = 50;
-const MAX_INFLIGHT_REQUESTS: usize = 5;
 
 #[tokio::main]
 async fn main() {
     let conns_limit = Arc::new(Semaphore::new(MAX_CONNS));
-    let reqs_limit = GlobalConcurrencyLimitLayer::new(MAX_INFLIGHT_REQUESTS);
     let app = make_service_fn(move |_stream: &AddrStream| {
         let conns_limit = conns_limit.clone();
-        let reqs_limit = reqs_limit.clone();
         async move {
             let permit = Arc::new(conns_limit.acquire_owned().await.unwrap());
             Ok::<_, Infallible>(
                 ServiceBuilder::new()
-                    .layer(reqs_limit)
                     .then(|res: Result<Response<Body>, Infallible>| {
                         drop(permit);
                         std::future::ready(res)
