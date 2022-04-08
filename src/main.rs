@@ -1,26 +1,22 @@
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::{convert::Infallible, time::Duration};
 
 use hyper::{
     server::conn::AddrStream,
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
-use tokio::sync::Semaphore;
-use tower::limit::ConcurrencyLimit;
+use tower::limit::ConcurrencyLimitLayer;
+use tower::ServiceBuilder;
 
 const MAX_INFLIGHT_REQUESTS: usize = 5;
 
 #[tokio::main]
 async fn main() {
-    let sem = Arc::new(Semaphore::new(MAX_INFLIGHT_REQUESTS));
-    let app = make_service_fn(move |_stream: &AddrStream| {
-        let sem = sem.clone();
-        async move {
-            Ok::<_, Infallible>(ConcurrencyLimit::with_semaphore(
-                service_fn(hello_world),
-                sem,
-            ))
-        }
+    let app = make_service_fn(move |_stream: &AddrStream| async move {
+        let svc = ServiceBuilder::new()
+            .layer(ConcurrencyLimitLayer::new(MAX_INFLIGHT_REQUESTS))
+            .service(service_fn(hello_world));
+        Ok::<_, Infallible>(svc)
     });
 
     Server::bind(&([127, 0, 0, 1], 1025).into())
