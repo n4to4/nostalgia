@@ -13,6 +13,10 @@ async fn main() {
         std::future::ready(Ok::<_, Infallible>(
             ServiceBuilder::new()
                 .layer(reqs_limit.clone())
+                .then(|res: Result<Response<Body>, Infallible>| async move {
+                    println!("Just served a request!");
+                    res
+                })
                 .service_fn(hello_world),
         ))
     });
