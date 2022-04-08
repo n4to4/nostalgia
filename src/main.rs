@@ -1,8 +1,11 @@
 use std::convert::Infallible;
+use tokio::net::TcpListener;
 
 use hyper::{
-    server::conn::AddrStream, service::make_service_fn, service::service_fn, Body, Request,
-    Response, Server,
+    server::conn::{AddrIncoming, AddrStream},
+    service::make_service_fn,
+    service::service_fn,
+    Body, Request, Response, Server,
 };
 
 #[tokio::main]
@@ -11,7 +14,8 @@ async fn main() {
         Ok::<_, Infallible>(service_fn(hello_world))
     });
 
-    Server::bind(&([127, 0, 0, 1], 1025).into())
+    let ln = TcpListener::bind("127.0.0.1:1025").await.unwrap();
+    Server::builder(AddrIncoming::from_listener(ln).unwrap())
         .serve(app)
         .await
         .unwrap();
