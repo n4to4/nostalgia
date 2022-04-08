@@ -10,13 +10,11 @@ const MAX_INFLIGHT_REQUESTS: usize = 5;
 async fn main() {
     let reqs_limit = GlobalConcurrencyLimitLayer::new(MAX_INFLIGHT_REQUESTS);
     let app = make_service_fn(move |_stream: &AddrStream| {
-        let reqs_limit = reqs_limit.clone();
-        async move {
-            let svc = ServiceBuilder::new()
-                .layer(reqs_limit)
-                .service_fn(hello_world);
-            Ok::<_, Infallible>(svc)
-        }
+        std::future::ready(Ok::<_, Infallible>(
+            ServiceBuilder::new()
+                .layer(reqs_limit.clone())
+                .service_fn(hello_world),
+        ))
     });
 
     Server::bind(&([127, 0, 0, 1], 1025).into())
