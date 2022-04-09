@@ -1,4 +1,5 @@
 use color_eyre::Report;
+use futures::Future;
 use hyper::{
     server::accept::Accept, service::make_service_fn, service::service_fn, Body, Request, Response,
 };
@@ -10,6 +11,7 @@ use std::pin::Pin;
 use std::task::Context;
 use std::time::Duration;
 use tokio::net::TcpStream;
+use tokio::time::Sleep;
 
 #[tokio::main]
 async fn main() -> Result<(), Report> {
@@ -32,8 +34,9 @@ async fn hello_world(req: Request<Body>) -> Result<Response<Body>, Infallible> {
         .unwrap())
 }
 
-struct Acceptor {
-    ln: tokio::net::TcpListener,
+enum Acceptor {
+    Waiting { sleep: Sleep, socket: Socket },
+    Listening { ln: tokio::net::TcpListener },
 }
 
 impl Acceptor {
@@ -42,18 +45,11 @@ impl Acceptor {
             Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP)).unwrap();
         println!("Binding...");
         socket.bind(&addr.into())?;
-        println!(
-            "Listening on {}...",
-            socket.local_addr()?.as_socket().unwrap()
-        );
-        socket.listen(128)?;
-        socket.set_nonblocking(true)?;
-        let fd = socket.as_raw_fd();
-        std::mem::forget(socket);
-        let ln = unsafe { std::net::TcpListener::from_raw_fd(fd) };
-        let ln = tokio::net::TcpListener::from_std(ln)?;
 
-        Ok(Self { ln })
+        Ok(Self::Waiting {
+            sleep: tokio::time::sleep(Duration::from_secs(2)),
+            socket,
+        })
     }
 }
 
@@ -62,10 +58,42 @@ impl Accept for Acceptor {
     type Error = Report;
 
     fn poll_accept(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> std::task::Poll<Option<Result<Self::Conn, Self::Error>>> {
-        let (stream, _) = futures::ready!(self.ln.poll_accept(cx)?);
-        Some(Ok(stream)).into()
+        match unsafe { self.as_mut().get_unchecked_mut() } {
+            Acceptor::Waiting { sleep, socket } => {
+                let sleep = unsafe { Pin::new_unchecked(sleep) };
+                futures::ready!(sleep.poll(cx));
+
+                println!(
+                    "Listening on {}...",
+                    socket.local_addr()?.as_socket().unwrap()
+                );
+                socket.listen(128)?;
+                socket.set_nonblocking(true)?;
+                let fd = socket.as_raw_fd();
+                let ln = unsafe { std::net::TcpListener::from_raw_fd(fd) };
+                let ln = tokio::net::TcpListener::from_std(ln)?;
+                let mut state = Self::Listening { ln };
+
+                std::mem::swap(unsafe { self.as_mut().get_unchecked_mut() }, &mut state);
+                match state {
+                    Acceptor::Waiting { socket, .. } => std::mem::forget(socket),
+                    _ => unreachable!(),
+                };
+                match unsafe { self.get_unchecked_mut() } {
+                    Acceptor::Listening { ln } => {
+                        let (stream, _) = futures::ready!(ln.poll_accept(cx)?);
+                        Some(Ok(stream)).into()
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            Acceptor::Listening { ln } => {
+                let (stream, _) = futures::ready!(ln.poll_accept(cx)?);
+                Some(Ok(stream)).into()
+            }
+        }
     }
 }
