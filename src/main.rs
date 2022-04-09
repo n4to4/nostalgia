@@ -1,45 +1,71 @@
+use color_eyre::Report;
+use hyper::{
+    server::accept::Accept, service::make_service_fn, service::service_fn, Body, Request, Response,
+};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::convert::Infallible;
-use std::net::{SocketAddr, TcpListener};
-
-use hyper::{
-    server::conn::{AddrIncoming, AddrStream},
-    service::make_service_fn,
-    service::service_fn,
-    Body, Request, Response, Server,
-};
+use std::net::SocketAddr;
+use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::pin::Pin;
+use std::task::Context;
+use std::time::Duration;
+use tokio::net::TcpStream;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Report> {
     let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP)).unwrap();
-    socket.bind(&addr.into()).unwrap();
+    let acc = Acceptor::new(addr)?;
 
-    let addr = socket.local_addr().unwrap().as_socket().unwrap();
-    println!("Bound but not listening on {}", addr);
-    assert!(TcpListener::bind(addr).is_err());
-    println!("As expected, nobody else can listen on the same address");
-    println!("Try curling it, it'll fail (press Enter when done)");
-    std::io::stdin().read_line(&mut String::new()).unwrap();
-
-    socket.listen(128).unwrap();
-    println!("Okay now we're listening (try curling it now, it should hang)");
-    std::io::stdin().read_line(&mut String::new()).unwrap();
-
-    //let app = make_service_fn(move |_stream: &AddrStream| async move {
-    //    Ok::<_, Infallible>(service_fn(hello_world))
-    //});
-
-    //let ln = TcpListener::bind("127.0.0.1:1025").await.unwrap();
-    //Server::builder(AddrIncoming::from_listener(ln).unwrap())
-    //    .serve(app)
-    //    .await
-    //    .unwrap();
+    hyper::Server::builder(acc)
+        .serve(make_service_fn(|_: &TcpStream| async move {
+            Ok::<_, Report>(service_fn(hello_world))
+        }))
+        .await?;
+    Ok(())
 }
 
 async fn hello_world(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     println!("{} {}", req.method(), req.uri());
+    tokio::time::sleep(Duration::from_millis(250)).await;
     Ok(Response::builder()
         .body(Body::from("Hello World!\n"))
         .unwrap())
+}
+
+struct Acceptor {
+    ln: tokio::net::TcpListener,
+}
+
+impl Acceptor {
+    fn new(addr: SocketAddr) -> Result<Self, Report> {
+        let socket =
+            Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP)).unwrap();
+        println!("Binding...");
+        socket.bind(&addr.into())?;
+        println!(
+            "Listening on {}...",
+            socket.local_addr()?.as_socket().unwrap()
+        );
+        socket.listen(128)?;
+        socket.set_nonblocking(true)?;
+        let fd = socket.as_raw_fd();
+        std::mem::forget(socket);
+        let ln = unsafe { std::net::TcpListener::from_raw_fd(fd) };
+        let ln = tokio::net::TcpListener::from_std(ln)?;
+
+        Ok(Self { ln })
+    }
+}
+
+impl Accept for Acceptor {
+    type Conn = TcpStream;
+    type Error = Report;
+
+    fn poll_accept(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> std::task::Poll<Option<Result<Self::Conn, Self::Error>>> {
+        let (stream, _) = futures::ready!(self.ln.poll_accept(cx)?);
+        Some(Ok(stream)).into()
+    }
 }
