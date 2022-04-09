@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 futures = "0.3.21"
 hyper = { version = "0.14", features = ["http1", "tcp", "server"] }
+socket2 = "0.4.4"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 tower = { version = "0.4.12", features = ["limit", "util"] }
